@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+    <entry name="pollMinutes" type="Int"><default>5</default></entry>
+    <entry name="liveSeconds" type="Int"><default>5</default></entry>
+    <entry name="alertLevels" type="String"><default>75,90,100</default></entry>
+    <entry name="notifyReset" type="Bool"><default>true</default></entry>
+    <entry name="showLiveInPanel" type="Bool"><default>true</default></entry>
+    <entry name="showWeekly" type="Bool"><default>true</default></entry>
+    <entry name="panelStyle" type="String"><default>meters</default></entry>
+    <entry name="accentColor" type="String"><default></default></entry>
+    <entry name="okColor" type="String"><default></default></entry>
+    <entry name="warnColor" type="String"><default></default></entry>
+    <entry name="badColor" type="String"><default></default></entry>
+  </group>
+</kcfg>

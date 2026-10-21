@@ -1,0 +1,21 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "alexandru.martalogu@jatify.com",
+                "Name": "Alexandru Martalogu"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Live Claude Code 5h and weekly usage limits",
+        "Icon": "utilities-system-monitor",
+        "Id": "org.dizmo.claudeusage",
+        "License": "MIT",
+        "Name": "Claude Code Usage",
+        "Version": "1.0.0",
+        "Website": "https://github.com/imdizmo/claude-usage-tracker",
+        "BugReportUrl": "https://github.com/imdizmo/claude-usage-tracker/issues"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
