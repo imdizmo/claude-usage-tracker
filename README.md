@@ -2,9 +2,11 @@
 
 [![test](https://github.com/imdizmo/claude-usage-tracker/actions/workflows/test.yml/badge.svg)](https://github.com/imdizmo/claude-usage-tracker/actions/workflows/test.yml)
 
-See your Claude Code plan limits on the Linux desktop: how much of the 5-hour
-and weekly limits you've used, when each one resets, and whether you're on pace
-to run out before it does.
+See your Claude Code plan limits on the Linux desktop: how much of the 5-hour,
+weekly and per-model weekly (Fable) limits you've used, when each one resets,
+and whether you're on pace to run out before it does. It shows only the limits
+your plan has: verified Ultra accounts have no 5-hour limit, so they see weekly
+and Fable instead.
 
 <p align="center">
   <img src="docs/panel.png" width="560" alt="The three panel styles, Numbers, Meters and Ring, each showing 5-hour 38%, weekly 61% and 2 working sessions">
@@ -34,16 +36,16 @@ under pace, amber when you're close, red when you're on track to hit the limit
 before it resets. All three, and the orange accent, can be changed in the
 applet's settings.
 
-**In the panel**, in one of three styles: *Numbers* (`5h 38 wk 61`), *Meters*
-(two small bars with an even-pace tick) or *Ring* (two rings, square enough for a
-vertical panel). The widget dims when it's showing a cached reading, and a
+**In the panel**, your plan's first two limits in one of three styles: *Numbers*
+(`5h 38 wk 61`, or `wk 24 fable 3` on Ultra), *Meters* (two small bars with an
+even-pace tick) or *Ring* (two rings, square enough for a vertical panel). The widget dims when it's showing a cached reading, and a
 pulsing count appears while Claude Code sessions are working.
 
 **In the applet's popup:**
 
-- **Plan**: both limits, each bar with an even-pace tick and a faded forecast
-  of where you'll be at reset, then a chart of the current 5-hour or weekly
-  window with a plain verdict ("At this pace you'll use about 63% by the reset").
+- **Plan**: every limit on your plan, each bar with an even-pace tick and a faded
+  forecast of where you'll be at reset, then a chart of the current window for
+  any of them with a plain verdict ("At this pace you'll use about 63% by the reset").
 - **Activity**, read from Claude Code's local logs on this computer: tokens for
   today, 7 and 30 days, a 12-week activity grid, and models and projects ranked
   by tokens for today, 7 days, 30 days or all time.
@@ -56,15 +58,15 @@ pulsing count appears while Claude Code sessions are working.
   it", "Usage endpoint is rate-limiting: will retry on the next poll", and so
   on, with the last good reading still on screen.
 
-**The tray widget** shows the 5-hour percentage as its icon, coloured green to
-red, with both limits and their reset countdowns in the tooltip and the overlay.
+**The tray widget** shows the first limit's percentage (5-hour, or weekly on
+Ultra) as its icon, coloured green to red, with every limit and their reset countdowns in the tooltip and the overlay.
 Left-click toggles the overlay; right-click has *Refresh now*, *Show/hide panel* and *Quit*.
 
 ## Requirements
 
 - Linux.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and
-  signed in with a Claude subscription (Pro, Max, Team or Enterprise). API-key logins have no plan
+  signed in with a Claude subscription (Pro, Max, Ultra, Team or Enterprise). API-key logins have no plan
   limits, so there's nothing to show.
 - Python 3.11 or newer.
 - **Applet:** KDE Plasma 6. No Python packages beyond the standard library.

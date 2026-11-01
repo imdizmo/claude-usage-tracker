@@ -2,7 +2,9 @@
 """Self-contained fetcher for the Claude Code usage plasmoid.
 
 Default mode prints one JSON line:
-  {"5h":{"pct","reset","pace","forecast","hist"},"weekly":{...},"stale":bool}
+  {"limits":["5h","weekly","fable"],"5h":{"pct","reset","pace","forecast","hist",...},...,"stale":bool}
+with only the limits the plan has: verified Ultra accounts have no 5-hour limit,
+and Max/Ultra add a separate weekly limit per model (Fable).
 or, only when there's no cached reading to fall back on:
   {"error":"...","code":N}
 
@@ -32,7 +34,9 @@ CACHE = Path.home() / ".cache" / "claude-usage.json"
 STATE = Path.home() / ".cache" / "claude-usage-state.json"   # reading history + sent alerts
 STATS = Path.home() / ".cache" / "claude-usage-stats.json"   # log scan offsets + daily totals
 URL = "https://api.anthropic.com/api/oauth/usage"
-WINDOWS = {"5h": 5 * 3600, "weekly": 7 * 86400}  # window length, seconds
+WINDOWS = {"5h": 5 * 3600, "weekly": 7 * 86400}  # window length, seconds; per-model limits are weekly
+# key -> (panel label, chart tab, full name); per-model limits are named after the model
+NAMES = {"5h": ("5h", "5-hour", "5-hour limit"), "weekly": ("wk", "Week", "Weekly limit")}
 ALERTS = (75, 90, 100)
 GRID_DAYS = 84  # 12 weeks of activity
 
@@ -74,21 +78,35 @@ def pace_hint(fc):
     return {"hint": "Under pace", "level": "ok", "verdict": verdict}
 
 
+def names(n):
+    return NAMES.get(n) or (n, n.capitalize(), f"{n.capitalize()} weekly limit")
+
+
+def limits(data):
+    """Limit keys in display order (data also holds 'at')."""
+    return [k for k, v in data.items() if isinstance(v, dict)]
+
+
 def build(d):
-    """API payload -> {'5h':{'pct','resets_at'}, 'weekly':{...}} (raw, cacheable)."""
+    """API payload -> {'5h':{'pct','resets_at'}, 'weekly':{...}, 'fable':{...}} (raw, cacheable).
+    five_hour is null on verified Ultra: no 5-hour limit, so no '5h' key rather than a fake 0%."""
     out = {}
-    for key, name in (("five_hour", "5h"), ("seven_day", "weekly")):
-        o = d.get(key) or {}
-        out[name] = {"pct": round(o.get("utilization") or 0), "resets_at": o.get("resets_at")}
+    if d.get("five_hour"):
+        out["5h"] = d["five_hour"]
+    out["weekly"] = d.get("seven_day") or {}
+    out = {n: {"pct": round(o.get("utilization") or 0), "resets_at": o.get("resets_at")} for n, o in out.items()}
+    for lim in d.get("limits") or []:  # separate weekly caps for one model, e.g. Fable on Max/Ultra
+        model = ((lim.get("scope") or {}).get("model") or {}).get("display_name")
+        if lim.get("kind") == "weekly_scoped" and model:
+            out[model.lower()] = {"pct": round(lim.get("percent") or 0), "resets_at": lim.get("resets_at")}
     return out
 
 
 def render(data, stale=False, history=()):
     now = datetime.now(timezone.utc).timestamp()
     out = {}
-    for n, window in WINDOWS.items():
-        if n not in data:
-            continue
+    for n in limits(data):
+        window = WINDOWS.get(n, WINDOWS["weekly"])
         pct, iso = data[n]["pct"], data[n].get("resets_at")
         frac = elapsed(iso, window, now)
         start = datetime.fromisoformat(iso).timestamp() - window if iso else now
@@ -96,6 +114,7 @@ def render(data, stale=False, history=()):
         fmt = "%H:%M" if n == "5h" else "%a %d/%m %H:%M"
         out[n] = {
             "pct": pct,
+            **dict(zip(("short", "tab", "label"), names(n))),
             "reset": reset_text(iso),
             "reset_at": datetime.fromisoformat(iso).astimezone().strftime(fmt) if iso else "",
             "start_at": datetime.fromtimestamp(start).strftime(fmt),
@@ -104,8 +123,9 @@ def render(data, stale=False, history=()):
             "forecast": fc,
             **pace_hint(fc),
             # [x as fraction of the window, pct] for readings inside the current window
-            "hist": [[round((t - start) / window, 4), v[n]] for t, v in history if t >= start],
+            "hist": [[round((t - start) / window, 4), v[n]] for t, v in history if t >= start and n in v],
         }
+    out["limits"] = limits(data)
     out["stale"] = stale
     at = data.get("at")
     out["updated"] = datetime.fromtimestamp(at).strftime("%H:%M") if at else ""
@@ -120,16 +140,17 @@ def minute(iso):
 def alerts(data, sent, levels=ALERTS, reset_alert=True):
     """Messages for newly crossed thresholds / reset windows; updates `sent` in place."""
     msgs = []
-    for n in WINDOWS:
+    for n in limits(data):
         pct, win = data[n]["pct"], minute(data[n]["resets_at"])
+        name = names(n)[2]
         prev = sent.get(n, {"win": win, "level": 0})
         if prev["win"] != win:
             if prev["level"] and reset_alert:  # only worth a ping if we'd warned during that window
-                msgs.append(f"{n} limit reset — back to {pct}%")
+                msgs.append(f"{name} reset — back to {pct}%")
             prev = {"win": win, "level": 0}
         level = max((a for a in levels if pct >= a), default=0)
         if level > prev["level"]:
-            msgs.append(f"{n} limit at {pct}%" + (" — limit reached" if pct >= 100 else ""))
+            msgs.append(f"{name} at {pct}%" + (" — limit reached" if pct >= 100 else ""))
             prev["level"] = level
         sent[n] = prev
     return msgs
@@ -219,7 +240,7 @@ def poll(levels=ALERTS, reset_alert=True, max_age=0):
     if levels is None:
         return render(data, history=state["history"])
     state["history"] = [h for h in state["history"] if h[0] > data["at"] - WINDOWS["weekly"]]
-    state["history"].append([data["at"], {n: data[n]["pct"] for n in WINDOWS}])
+    state["history"].append([data["at"], {n: data[n]["pct"] for n in limits(data)}])
     for msg in alerts(data, state["sent"], levels, reset_alert):
         notify(msg)
     save(STATE, state)
@@ -482,6 +503,16 @@ def _selftest():
     r = render(build({"five_hour": {"utilization": 4.0, "resets_at": "2099-01-01T00:00:00+00:00"},
                       "seven_day": {}}))
     assert r["5h"]["pct"] == 4 and r["weekly"]["pct"] == 0 and r["stale"] is False, r
+    # verified Ultra: five_hour null -> no 5h limit; the Fable weekly cap comes from limits[]
+    soon = datetime.fromtimestamp(time.time() + 3 * 86400, timezone.utc).isoformat()
+    ultra = {"five_hour": None, "seven_day": {"utilization": 24.0, "resets_at": soon},
+             "limits": [{"kind": "weekly_all", "percent": 24, "scope": None},
+                        {"kind": "weekly_scoped", "percent": 3, "resets_at": "2099-01-01T00:00:00+00:00",
+                         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}}]}
+    r = render(build(ultra), history=[[time.time(), {"5h": 1, "weekly": 20}]])
+    assert r["limits"] == ["weekly", "fable"] and "5h" not in r, r
+    assert r["fable"]["pct"] == 3 and r["fable"]["label"] == "Fable weekly limit" and r["fable"]["hist"] == [], r
+    assert r["weekly"]["short"] == "wk" and r["weekly"]["hist"][0][1] == 20, r
     # pace: 1h into a 5h window → 20% elapsed; 30% used → forecast 150%
     reset = datetime.fromtimestamp(time.time() + 4 * 3600, timezone.utc).isoformat()
     r = render({"5h": {"pct": 30, "resets_at": reset}, "weekly": {"pct": 0, "resets_at": None}},
@@ -494,10 +525,10 @@ def _selftest():
     sent, w1 = {}, "2099-01-01T00:00:00.1+00:00"
     mk = lambda p, w: {"5h": {"pct": p, "resets_at": w}, "weekly": {"pct": 0, "resets_at": None}}
     assert alerts(mk(50, w1), sent) == []
-    assert alerts(mk(80, w1), sent) == ["5h limit at 80%"]
+    assert alerts(mk(80, w1), sent) == ["5-hour limit at 80%"]
     assert alerts(mk(81, "2099-01-01T00:00:00.9+00:00"), sent) == []  # jitter isn't a new window
-    assert alerts(mk(95, w1), sent) == ["5h limit at 95%"]
-    assert alerts(mk(3, "2099-01-01T05:00:00+00:00"), sent) == ["5h limit reset — back to 3%"]
+    assert alerts(mk(95, w1), sent) == ["5-hour limit at 95%"]
+    assert alerts(mk(3, "2099-01-01T05:00:00+00:00"), sent) == ["5-hour limit reset — back to 3%"]
     # scan: dedupes repeated message ids, resumes from offsets, skips partial lines
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp) / "p" / "s.jsonl"
@@ -526,8 +557,9 @@ def _selftest():
     assert "HTTP 503" in explain(http(503)) and explain(urllib.error.URLError("x")).startswith("Can't reach")
     # alerts honour custom levels and the reset toggle
     sent = {}
-    assert alerts(mk(60, w1), sent, levels=(50,)) == ["5h limit at 60%"]
+    assert alerts(mk(60, w1), sent, levels=(50,)) == ["5-hour limit at 60%"]
     assert alerts(mk(1, "2099-01-02T00:00:00+00:00"), sent, levels=(50,), reset_alert=False) == []
+    assert alerts({"fable": {"pct": 91, "resets_at": w1}}, sent) == ["Fable weekly limit at 91%"]
     # live: pending tool is the last tool_use without a result; dead pids are dropped
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)

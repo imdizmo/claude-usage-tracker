@@ -10,7 +10,7 @@ import "Theme.js" as T
 PlasmoidItem {
     id: root
 
-    property var usage: null       // fetch.py output: {"5h":{...},"weekly":{...},"stale","updated","why"}
+    property var usage: null       // fetch.py output: {"limits":["weekly","fable"],"weekly":{...},"stale","updated","why"}
     property var stats: null       // fetch.py --stats output
     property var live: null        // fetch.py --live output
     property string err: ""        // only set when there is nothing to show
@@ -21,6 +21,8 @@ PlasmoidItem {
     readonly property bool hasData: usage !== null
     readonly property bool stale: hasData && usage.stale === true
     readonly property var cfg: Plasmoid.configuration
+    // limits shown in the panel: the plan's first one (5h, or weekly on verified Ultra), plus the next if enabled
+    readonly property var shown: hasData ? usage.limits.slice(0, cfg.showWeekly ? 2 : 1) : ["weekly"]
     // executable engine wants a filesystem path, not a file:// URL
     readonly property string script: Qt.resolvedUrl("../code/fetch.py").toString().replace("file://", "")
     // alert levels end up in a shell command: keep digits and commas only
@@ -39,6 +41,7 @@ PlasmoidItem {
         return lastPoll ? "next check in " + Math.floor(s / 60) + "m " + (s % 60) + "s" : ""
     }
     function pct(k) { return hasData ? usage[k].pct : 0 }
+    function short(k) { return hasData ? usage[k].short : "" }
     function lv(k) { return pal.level(hasData ? usage[k].level : "ok") }
     function poll() { lastPoll = Date.now(); src.connectSource(cmd); src.connectSource(statsCmd) }
     function openSettings() {
@@ -50,8 +53,7 @@ PlasmoidItem {
     preferredRepresentation: compactRepresentation
     toolTipMainText: "Claude Code usage"
     toolTipSubText: !hasData ? (err ? err : "loading…")
-        : "5h: " + usage["5h"].pct + "%  (" + usage["5h"].reset + ")  " + forecastText(usage["5h"])
-          + "\nweekly: " + usage.weekly.pct + "%  (" + usage.weekly.reset + ")  " + forecastText(usage.weekly)
+        : usage.limits.map(k => usage[k].label + ": " + usage[k].pct + "%  (" + usage[k].reset + ")  " + forecastText(usage[k])).join("\n")
           + (stale ? "\n(reading from " + usage.updated + " — " + usage.why + ")" : "")
           + (busy ? "\n" + busy + " Claude Code session" + (busy > 1 ? "s" : "") + " working" : "")
 
@@ -108,7 +110,6 @@ PlasmoidItem {
         Layout.maximumWidth: row.implicitWidth + 12
         onClicked: root.expanded = !root.expanded
         readonly property string style: root.cfg.panelStyle
-        readonly property bool weekly: root.cfg.showWeekly
 
         Row {
             id: row
@@ -116,22 +117,21 @@ PlasmoidItem {
             spacing: 8
             opacity: root.stale ? 0.55 : 1.0   // dimmed = cached
 
-            Row {   // Numbers: "5h 38  wk 61", each number in its pace colour
+            Row {   // Numbers: "5h 38  wk 61" (or "wk 24  fable 3"), each number in its pace colour
                 visible: compact.style === "numbers"
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 10
                 Repeater {
-                    model: [["5h", "5h", true], ["wk", "weekly", compact.weekly]]
+                    model: root.shown
                     Row {
-                        visible: modelData[2]
                         spacing: 4
-                        PC3.Label { text: modelData[0]; opacity: 0.6; anchors.baseline: num.baseline }
+                        PC3.Label { text: root.short(modelData); opacity: 0.6; anchors.baseline: num.baseline }
                         PC3.Label {
                             id: num
-                            text: root.hasData ? root.pct(modelData[1]) : "—"
+                            text: root.hasData ? root.pct(modelData) : "—"
                             font.bold: true
                             font.family: "monospace"
-                            color: root.hasData ? root.lv(modelData[1]).fill : Kirigami.Theme.disabledTextColor
+                            color: root.hasData ? root.lv(modelData).fill : Kirigami.Theme.disabledTextColor
                         }
                     }
                 }
@@ -145,7 +145,7 @@ PlasmoidItem {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 5
                     Repeater {
-                        model: compact.weekly ? ["5h", "weekly"] : ["5h"]
+                        model: root.shown
                         Bar {
                             width: 46; implicitHeight: 5
                             value: root.pct(modelData)
@@ -159,17 +159,17 @@ PlasmoidItem {
                 Column {
                     anchors.verticalCenter: parent.verticalCenter
                     Repeater {
-                        model: compact.weekly ? ["5h", "weekly"] : ["5h"]
+                        model: root.shown
                         PC3.Label {
                             text: root.hasData ? root.pct(modelData) + "%" : "—"
                             font.family: "monospace"
-                            font.pixelSize: compact.weekly ? 10 : 13
+                            font.pixelSize: root.shown.length > 1 ? 10 : 13
                         }
                     }
                 }
             }
 
-            Row {   // Ring: outer ring 5-hour, inner ring weekly
+            Row {   // Ring: outer ring the first limit, inner ring the second
                 visible: compact.style === "ring"
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 5
@@ -177,7 +177,7 @@ PlasmoidItem {
                     id: ring
                     width: 22; height: 22
                     anchors.verticalCenter: parent.verticalCenter
-                    readonly property var sig: [root.pct("5h"), root.pct("weekly"), compact.weekly, root.hasData, pal.levels]
+                    readonly property var sig: [root.shown.map(root.pct), root.hasData, pal.levels]
                     onSigChanged: requestPaint()
                     onPaint: {
                         var ctx = getContext("2d")
@@ -191,16 +191,17 @@ PlasmoidItem {
                             ctx.strokeStyle = col
                             ctx.beginPath(); ctx.arc(11, 11, r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * Math.min(p, 100) / 100); ctx.stroke()
                         }
-                        arc(9, 3, root.pct("5h"), root.lv("5h").fill)
-                        if (compact.weekly) arc(4.5, 2.5, root.pct("weekly"), root.lv("weekly").fill)
+                        var s = root.shown
+                        arc(9, 3, root.pct(s[0]), root.lv(s[0]).fill)
+                        if (s.length > 1) arc(4.5, 2.5, root.pct(s[1]), root.lv(s[1]).fill)
                     }
                 }
                 PC3.Label {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: root.hasData ? root.pct("5h") : "—"
+                    text: root.hasData ? root.pct(root.shown[0]) : "—"
                     font.bold: true
                     font.family: "monospace"
-                    color: root.hasData ? root.lv("5h").fill : Kirigami.Theme.disabledTextColor
+                    color: root.hasData ? root.lv(root.shown[0]).fill : Kirigami.Theme.disabledTextColor
                 }
             }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code usage tray widget: live 5h + weekly limit %.
+"""Claude Code usage tray widget: live plan limit % (5h where the plan has it, weekly, per-model weekly).
 
 Data comes from plasmoid/contents/code/fetch.py, shared with the Plasma applet:
 it reads the OAuth token Claude Code stores in ~/.claude/.credentials.json and
@@ -37,7 +37,7 @@ def color_for(pct):
 
 
 def make_icon(pct):
-    """Render the 5h percentage as the tray icon so it's glanceable."""
+    """Render the first limit's percentage as the tray icon so it's glanceable."""
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
@@ -69,10 +69,13 @@ class Overlay(QWidget):
         title = QLabel("Claude Code usage  ·  drag to move")
         title.setStyleSheet("font-weight:bold;color:#8b949e;")
         lay.addWidget(title)
-        self.rows = {}
-        for name in ("5h", "weekly"):
+        self.lay = lay
+        self.rows = {}  # limit key -> widgets, made when a limit first appears: plans differ
+
+    def row(self, name, label):
+        if name not in self.rows:
             row = QHBoxLayout()
-            lbl = QLabel(name)
+            lbl = QLabel(label)
             lbl.setFixedWidth(48)
             bar = QProgressBar()
             bar.setTextVisible(False)
@@ -84,11 +87,16 @@ class Overlay(QWidget):
             reset.setStyleSheet("color:#8b949e;")
             for w in (lbl, bar, pct, reset):
                 row.addWidget(w)
-            lay.addLayout(row)
-            self.rows[name] = (bar, pct, reset)
+            self.lay.addLayout(row)
+            self.rows[name] = (lbl, bar, pct, reset)
+        return self.rows[name]
 
     def update_data(self, data):
-        for name, (bar, pct, reset) in self.rows.items():
+        for name in self.rows.keys() - set(data["limits"]):  # limit gone (e.g. Ultra verified: no 5h)
+            for w in self.rows.pop(name):
+                w.deleteLater()
+        for name in data["limits"]:
+            _, bar, pct, reset = self.row(name, data[name]["short"])
             val = data[name]["pct"]
             bar.setValue(min(val, 100))
             bar.setStyleSheet(f"QProgressBar::chunk{{background:{color_for(val).name()};border-radius:4px;}}")
@@ -173,16 +181,21 @@ class Tray(QSystemTrayIcon):
         if not self._pinned:  # size is known only after first data
             self.overlay.pin_corner()
             self._pinned = True
-        h, w = data["5h"], data["weekly"]
-        self.setIcon(make_icon(h["pct"]))
+        self.setIcon(make_icon(data[data["limits"][0]]["pct"]))
         stale = f"\n(reading from {data['updated']} — {data['why']})" if data["stale"] else ""
-        self.setToolTip(f"Claude Code\n5h: {h['pct']}%  ({h['reset']})\n"
-                        f"weekly: {w['pct']}%  ({w['reset']}){stale}")
+        lines = (f"{data[n]['label']}: {data[n]['pct']}%  ({data[n]['reset']})" for n in data["limits"])
+        self.setToolTip("Claude Code\n" + "\n".join(lines) + stale)
 
 
 def _selftest():
     assert color_for(10).name() != color_for(85).name()  # green != red
     fetch._selftest()  # data side: parsing, reset text, poll's cache fallback
+    app = QApplication.instance() or QApplication([])  # noqa: F841 (widgets need one)
+    o = Overlay()
+    lim = lambda *ks: fetch.render({k: {"pct": 5, "resets_at": None} for k in ks})
+    o.update_data(lim("5h", "weekly"))
+    o.update_data(lim("weekly", "fable"))  # account verified for Ultra: 5h row goes, Fable row comes
+    assert list(o.rows) == ["weekly", "fable"] and o.rows["fable"][2].text() == "5%", o.rows
 
 
 def main():

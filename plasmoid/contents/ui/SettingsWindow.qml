@@ -202,7 +202,7 @@ Window {
                         }
                         Divider {}
                         SettingRow {
-                            title: "Show weekly usage"
+                            title: "Show second limit"
                             Toggle { checked: win.cfg.showWeekly; onToggled: v => win.cfg.showWeekly = v }
                         }
                         Divider {}

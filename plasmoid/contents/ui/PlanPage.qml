@@ -2,15 +2,17 @@ import QtQuick
 import QtQuick.Layouts
 import "Theme.js" as T
 
-// Plan tab: both limits with pace markers and forecasts, the current window's chart and verdict.
+// Plan tab: each of the plan's limits with pace markers and forecasts, the current window's chart and verdict.
 ColumnLayout {
     id: page
     property var usage: null        // fetch.py output
     property string err: ""
     property string nextCheck: ""   // "next check in 3m 12s"
     property var today: null        // stats.today, for the footer
-    property string chartWin: "5h"
+    property string chartWin: ""    // limit key picked for the chart; the plan's first limit until then
     readonly property bool hasData: usage !== null
+    readonly property var keys: hasData ? usage.limits : []
+    readonly property string win: keys.indexOf(chartWin) >= 0 ? chartWin : (keys[0] || "")
     spacing: 12
     Colours { id: pal }
 
@@ -45,16 +47,16 @@ ColumnLayout {
         visible: page.hasData
         spacing: 6
         Repeater {
-            model: page.hasData ? [["5-hour limit", page.usage["5h"]], ["Weekly limit", page.usage.weekly]] : []
+            model: page.keys
             ColumnLayout {
-                readonly property var w: modelData[1]
+                readonly property var w: page.usage[modelData]
                 readonly property var lv: pal.level(w.level)
                 Layout.fillWidth: true
                 spacing: 6
                 Divider { visible: index > 0; Layout.topMargin: 6; Layout.bottomMargin: 4 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Txt { text: modelData[0]; font.bold: true; size: 14; Layout.fillWidth: true }
+                    Txt { text: w.label; font.bold: true; size: 14; Layout.fillWidth: true }
                     Txt { text: w.pct + "%"; font.bold: true; mono: true; size: 14 }
                 }
                 Bar {
@@ -82,9 +84,10 @@ ColumnLayout {
         Layout.topMargin: 4
         Txt { text: "This window"; font.bold: true; size: 14; Layout.fillWidth: true }
         Segmented {
-            model: ["5-hour", "Week"]
-            currentIndex: page.chartWin === "5h" ? 0 : 1
-            onActivated: i => page.chartWin = i === 0 ? "5h" : "weekly"
+            visible: page.keys.length > 1
+            model: page.keys.map(k => page.usage[k].tab)
+            currentIndex: page.keys.indexOf(page.win)
+            onActivated: i => page.chartWin = page.keys[i]
         }
     }
 
@@ -92,7 +95,7 @@ ColumnLayout {
         id: chartCard
         visible: page.hasData
         spacing: 8
-        readonly property var w: page.hasData ? page.usage[page.chartWin] : null
+        readonly property var w: page.win ? page.usage[page.win] : null
 
         Rectangle {
             Layout.fillWidth: true
