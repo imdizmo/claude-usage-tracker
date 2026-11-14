@@ -14,6 +14,10 @@ or, only when there's no cached reading to fall back on:
 `--stats` prints Claude Code activity read from the local session logs:
   {"today","week","models","projects","grid"}
 
+`--others` prints the plan limits of other AI coding tools found on this machine:
+  {"tools":[{"name","short","plan","note","limits":[{"label","short","pct","reset","pace","forecast","level",...}]}]}
+Codex from its local session logs; Antigravity from its running language server.
+
 The /api/oauth/usage endpoint is strictly rate-limited (429s if polled too
 often), so on any failure we serve the last good reading from a small cache,
 flagged stale. Reset times recompute from the cached resets_at, so the
@@ -21,6 +25,8 @@ countdown stays live even while serving stale data.
 """
 import json
 import os
+import re
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -297,15 +303,20 @@ def kind(name):
     return "tool"
 
 
+def tail(path):
+    """Last TAIL bytes of a log as lines (the first is usually cut mid-way); [] if unreadable."""
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, path.stat().st_size - TAIL))
+            return f.read().splitlines()
+    except OSError:
+        return []
+
+
 def pending_tool(transcript):
     """(label, kind) of the tool call a session is waiting on: last tool_use with no
     tool_result after it."""
-    try:
-        with transcript.open("rb") as f:
-            f.seek(max(0, transcript.stat().st_size - TAIL))
-            lines = f.read().splitlines()
-    except OSError:
-        return None
+    lines = tail(transcript)
     done = set()
     for line in reversed(lines):
         if b"tool_" not in line:
@@ -496,6 +507,144 @@ def stats():
     return summarize(st)
 
 
+# ---- other AI coding tools ----
+
+CODEX = Path.home() / ".codex" / "sessions"
+AGY = Path.home() / ".gemini" / "antigravity"
+CODEX_WINDOWS = {300: ("5-hour limit", "5h"), 10080: ("Weekly limit", "wk")}  # window_minutes -> labels
+
+
+def limit_row(label, pct, iso, window=None, short=""):
+    """One limit for the Other tools tab: pace and forecast only when the window length is known."""
+    frac = elapsed(iso, window) if window else None
+    fc = forecast(pct, frac)
+    h = pace_hint(fc)
+    if fc is None:  # no forecast to colour by: colour by how much is used
+        h["level"] = "bad" if pct >= 100 else "warn" if pct >= 80 else "ok"
+    return {"label": label, "short": short, "pct": pct, "reset": reset_text(iso),
+            "pace": round(frac * 100) if frac is not None else None, "forecast": fc, **h}
+
+
+def codex(root=CODEX, now=None):
+    """Codex plan limits from its newest session logs. Codex logs its rate limits with every
+    turn, so the newest reading is current: usage only moves when Codex is used."""
+    if not root.is_dir():
+        return None
+    now = now or time.time()
+    files = []
+    for f in root.glob("*/*/*/*.jsonl"):  # sessions/YYYY/MM/DD/rollout-*.jsonl
+        try:
+            files.append((f.stat().st_mtime, f))
+        except OSError:
+            continue
+    for _, f in sorted(files, reverse=True)[:5]:  # a just-started session may have no reading yet
+        for line in reversed(tail(f)):
+            if b'"rate_limits"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+                rl = d["payload"]["rate_limits"]
+                when = datetime.fromisoformat(d["timestamp"].replace("Z", "+00:00")).astimezone()
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+            wins = [w for w in (rl.get("primary"), rl.get("secondary")) if w]
+            if not wins:
+                continue  # other limit ids (e.g. "premium") log nulls
+            limits = []
+            for w in wins:
+                mins, at = w.get("window_minutes") or 0, w.get("resets_at") or 0
+                label, short = CODEX_WINDOWS.get(mins, (f"{mins // 60}-hour limit", f"{mins // 60}h"))
+                if at <= now:  # window ended since the last session: it starts fresh
+                    limits.append(limit_row(label, 0, None, short=short) | {"reset": "starts with your next Codex use"})
+                else:
+                    iso = datetime.fromtimestamp(at, timezone.utc).isoformat()
+                    limits.append(limit_row(label, round(w.get("used_percent") or 0), iso, mins * 60, short))
+            return {"name": "Codex", "short": "cx", "plan": (rl.get("plan_type") or "").capitalize(), "limits": limits,
+                    "note": f"From your last Codex session, {when:%a %H:%M}"}
+    return {"name": "Codex", "short": "cx", "plan": "", "limits": [], "note": "No Codex session with plan limits yet."}
+
+
+def listen_ports(pid):
+    """TCP ports a process listens on, via its socket inodes in /proc."""
+    inodes = set()
+    try:
+        for fd in Path(f"/proc/{pid}/fd").iterdir():
+            try:
+                link = os.readlink(fd)
+            except OSError:
+                continue
+            if link.startswith("socket:["):
+                inodes.add(link[8:-1])
+        rows = Path("/proc/net/tcp").read_text().splitlines()[1:]
+    except OSError:
+        return []
+    return [int(r.split()[1].split(":")[1], 16) for r in rows
+            if r.split()[3] == "0A" and r.split()[9] in inodes]  # 0A = LISTEN
+
+
+def agy_server():
+    """(pid, csrf token) of Antigravity's running language server, or None."""
+    for p in Path("/proc").glob("[0-9]*"):
+        try:
+            args = (p / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if args[0].endswith(b"language_server") and b"antigravity" in args and b"--csrf_token" in args:
+            i = args.index(b"--csrf_token") + 1
+            if i < len(args):
+                return p.name, args[i].decode()
+    return None
+
+
+def agy_status(pid, token):
+    """GetUserStatus from the language server's local API; it serves http on one port, https on another."""
+    body = json.dumps({"metadata": {"ideName": "antigravity", "extensionName": "antigravity", "locale": "en"}}).encode()
+    ctx = ssl._create_unverified_context()  # ponytail: 127.0.0.1 with the app's self-signed cert
+    for port in listen_ports(pid):
+        for scheme in ("http", "https"):
+            req = urllib.request.Request(
+                f"{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus",
+                data=body, headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1",
+                                    "X-Codeium-Csrf-Token": token})
+            try:
+                with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
+                    return json.load(r)["userStatus"]
+            except (OSError, ValueError, KeyError):
+                continue
+    return None
+
+
+def agy_limits(st):
+    """Per-model quotas, one row per model: "Claude Opus 5.5 (High)" and "(Low)" share a quota."""
+    groups = {}
+    for m in (st.get("cascadeModelConfigData") or {}).get("clientModelConfigs") or []:
+        q = m.get("quotaInfo")
+        if not q or not m.get("label"):
+            continue
+        name = re.sub(r"\s*\([^)]*\)$", "", m["label"])
+        left = q.get("remainingFraction", 0)  # proto3 JSON drops zeros: missing = used up
+        if name not in groups or left < groups[name][0]:
+            groups[name] = (left, q.get("resetTime"))
+    return [limit_row(name, round((1 - left) * 100), (reset or "").replace("Z", "+00:00") or None)
+            for name, (left, reset) in groups.items()]
+
+
+def antigravity(root=AGY):
+    if not root.is_dir():
+        return None
+    srv = agy_server()
+    st = srv and agy_status(*srv)
+    if not st:
+        return {"name": "Antigravity", "short": "ag", "plan": "", "limits": [],
+                "note": "Open Antigravity to see its quotas: they're read from the running app."}
+    plan = ((st.get("planStatus") or {}).get("planInfo") or {}).get("planName") or ""
+    return {"name": "Antigravity", "short": "ag", "plan": plan, "limits": agy_limits(st), "note": ""}
+
+
+def others():
+    return {"tools": [t for t in (codex(), antigravity()) if t]}
+
+
 def _selftest():
     import tempfile
     assert reset_text(None) == ""
@@ -614,6 +763,35 @@ def _selftest():
         finally:
             globals()["fetch"] = real
     CREDS, CACHE, STATE = saved
+    # codex: newest reading wins; an ended window shows 0; null-limit readings are skipped
+    with tempfile.TemporaryDirectory() as tmp:
+        day = Path(tmp) / "2026" / "11" / "08"
+        day.mkdir(parents=True)
+        now = time.time()
+        ev = lambda p, s, lid="codex": json.dumps({"timestamp": "2026-11-08T22:58:42.521Z", "payload": {
+            "type": "token_count", "rate_limits": {"limit_id": lid, "plan_type": "plus", "primary": p, "secondary": s}}}) + "\n"
+        win = lambda pct, mins, at: {"used_percent": pct, "window_minutes": mins, "resets_at": at}
+        (day / "a.jsonl").write_text(ev(win(10, 300, now + 3600), None)
+                                     + ev(win(99.0, 300, now + 3600), win(16.0, 10080, now - 1))
+                                     + ev(None, None, "premium")
+                                     + '{"payload": {"rate_limits": {"primary": {"used_percent": 1}}}}\n')  # no timestamp
+        c = codex(Path(tmp), now)
+        assert c["plan"] == "Plus" and [(r["label"], r["pct"]) for r in c["limits"]] == \
+            [("5-hour limit", 99), ("Weekly limit", 0)], c
+        assert c["limits"][0]["level"] == "bad" and c["limits"][1]["reset"].startswith("starts with"), c
+        assert [r["short"] for r in c["limits"]] == ["5h", "wk"] and c["short"] == "cx", c
+        assert codex(Path(tmp) / "missing") is None
+    # antigravity: variants of one model share a quota; a missing fraction means used up
+    st = {"cascadeModelConfigData": {"clientModelConfigs": [
+        {"label": "Claude Opus 5.5 (Low)", "quotaInfo": {"remainingFraction": 0.4, "resetTime": "2099-01-01T00:00:00Z"}},
+        {"label": "Claude Opus 5.5 (High)", "quotaInfo": {"remainingFraction": 0.25, "resetTime": "2099-01-01T00:00:00Z"}},
+        {"label": "GPT-OSS 120B (Medium)", "quotaInfo": {"resetTime": "2099-01-01T00:00:00Z"}},
+        {"label": "No quota"}]}}
+    rows = agy_limits(st)
+    assert [(r["label"], r["pct"], r["level"]) for r in rows] == \
+        [("Claude Opus 5.5", 75, "ok"), ("GPT-OSS 120B", 100, "bad")], rows
+    assert rows[0]["reset"].startswith("resets in ") and rows[0]["pace"] is None
+    assert antigravity(Path("/nonexistent")) is None
     print("selftest ok")
 
 
@@ -623,6 +801,7 @@ if __name__ == "__main__":
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--stats", action="store_true")
     ap.add_argument("--live", action="store_true")
+    ap.add_argument("--others", action="store_true")
     ap.add_argument("--alerts", default=",".join(map(str, ALERTS)),
                     help="comma-separated alert thresholds in %%; empty disables")
     ap.add_argument("--no-reset-alert", action="store_true")
@@ -633,6 +812,8 @@ if __name__ == "__main__":
         print(json.dumps(stats()))
     elif a.live:
         print(json.dumps(live()))
+    elif a.others:
+        print(json.dumps(others()))
     else:
         levels = tuple(int(x) for x in a.alerts.split(",") if x.strip().isdigit())
         print(json.dumps(poll(levels, not a.no_reset_alert)))

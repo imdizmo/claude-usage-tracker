@@ -6,15 +6,17 @@ See your Claude Code plan limits on the Linux desktop: how much of the 5-hour,
 weekly and per-model weekly (Fable) limits you've used, when each one resets,
 and whether you're on pace to run out before it does. It shows only the limits
 your plan has: verified Ultra accounts have no 5-hour limit, so they see weekly
-and Fable instead.
+and Fable instead. If you also use Codex or Antigravity, their limits appear
+alongside.
 
 <p align="center">
-  <img src="docs/panel.png" width="560" alt="The three panel styles, Numbers, Meters and Ring, each showing 5-hour 38%, weekly 61% and 2 working sessions">
+  <img src="docs/panel.png" width="560" alt="The three panel styles, Numbers, Meters and Ring, each showing 5-hour 38%, weekly 61% and 3 working sessions; below, Numbers with Codex and Antigravity switched on too">
 </p>
 <p align="center">
-  <img src="docs/plan.png" width="270" alt="Plan tab: both limits with pace markers and forecasts, a chart of the current 5-hour window, and a verdict">
-  <img src="docs/activity.png" width="270" alt="Activity tab: tokens for today, 7 and 30 days, a 12-week activity grid, and models and projects ranked by tokens">
-  <img src="docs/sessions.png" width="270" alt="Sessions tab: running Claude Code sessions grouped into working and waiting for you">
+  <img src="docs/plan.png" width="200" alt="Plan tab: 5-hour, weekly and Fable limits with pace markers and forecasts, a chart of the current 5-hour window, and a verdict">
+  <img src="docs/activity.png" width="200" alt="Activity tab: tokens for today, 7 and 30 days, a 12-week activity grid, and models and projects ranked by tokens">
+  <img src="docs/sessions.png" width="200" alt="Sessions tab: running Claude Code sessions grouped into working and waiting for you">
+  <img src="docs/others.png" width="200" alt="Other tools tab: Codex 5-hour and weekly limits, and Antigravity quotas per model">
 </p>
 <p align="center"><sub>Screenshots use demo data.</sub></p>
 
@@ -38,8 +40,11 @@ applet's settings.
 
 **In the panel**, your plan's first two limits in one of three styles: *Numbers*
 (`5h 38 wk 61`, or `wk 24 fable 3` on Ultra), *Meters* (two small bars with an
-even-pace tick) or *Ring* (two rings, square enough for a vertical panel). The widget dims when it's showing a cached reading, and a
-pulsing count appears while Claude Code sessions are working.
+even-pace tick) or *Ring* (two rings, square enough for a vertical panel).
+Settings → Panel has a switch per tool: Claude (on by default), Codex (`cx 5h 0
+wk 16`) and Antigravity (`ag 87`, its most-used model), so the panel shows any
+mix. The widget dims when it's showing a cached reading, and a pulsing count
+appears while Claude Code sessions are working.
 
 **In the applet's popup:**
 
@@ -52,6 +57,11 @@ pulsing count appears while Claude Code sessions are working.
 - **Sessions**: every running Claude Code session, working ones first, and what
   each is doing right now (`Editing routes.ts`, `Running: <command>`,
   `Thinking`, `Waiting for you`).
+- **Other tools**: plan limits of other AI coding tools on this computer.
+  **Codex**: its 5-hour and weekly limits, read from Codex's own session logs
+  (as fresh as your last Codex turn). **Antigravity**: each model's quota and
+  reset, read from the running Antigravity app (open it to see them). The tray
+  overlay and tooltip list these too.
 - **Desktop notifications** when a limit crosses 75%, 90% or 100% (configurable),
   and when a window you were warned about resets.
 - **Plain-language errors**: "Login expired: open Claude Code once to refresh
@@ -73,6 +83,9 @@ Left-click toggles the overlay; right-click has *Refresh now*, *Show/hide panel*
 - **Tray widget:** a desktop with a system tray. PySide6 (Qt 6 for Python) is used from your distribution, or installed automatically.
 - Optional: `notify-send` (package `libnotify`) for the applet's desktop
   notifications.
+- Optional: [Codex CLI](https://github.com/openai/codex) signed in with ChatGPT,
+  and/or [Antigravity](https://antigravity.google), for the *Other tools* tab.
+  Gemini CLI isn't shown: Google ended its personal tier in favour of Antigravity.
 
 ## Install
 
@@ -109,7 +122,7 @@ Applet settings live in its own window: the gear icon in the popup, or
 right-click the applet and choose **Settings…**. Changes apply immediately.
 
 <p align="center">
-  <img src="docs/settings.png" width="600" alt="The settings window: check interval, notification thresholds, panel style, session refresh and colours">
+  <img src="docs/settings.png" width="600" alt="The settings window: check interval, notification thresholds, panel style, a switch per tool for the panel, session refresh and colours">
 </p>
 
 | Setting | Default | |
@@ -118,7 +131,8 @@ right-click the applet and choose **Settings…**. Changes apply immediately.
 | Notify when a limit reaches | 75%, 90%, 100% | Any of 50 / 75 / 90 / 100%. |
 | Notify when a limit resets | on | Only for windows you were warned about. |
 | Panel style | Meters | Numbers, Meters or Ring. |
-| Show weekly usage | on | In the panel. |
+| Show Claude / Codex / Antigravity | on / off / off | Which tools the panel shows. Antigravity shows its most-used model. |
+| Show second limit | on | In the panel, for Claude and Codex. |
 | Show working sessions | on | The pulsing count in the panel. |
 | Refresh session status every | 5 seconds | Local files only, no network. |
 | Colours | orange accent; blue, amber, red | Accent, on pace, close, over pace. Click a swatch to pick; **Reset to defaults** undoes it. |
@@ -144,10 +158,18 @@ last few minutes instead of making a second request.
 The first scan can take a few seconds on a large history. After that, only
 newly appended lines are read.
 
+**Other tools.** Codex writes its plan limits into its own session logs
+(`~/.codex/sessions/`) with every turn; the *Other tools* tab shows the newest
+reading, so it's as fresh as your last Codex use. Antigravity's quotas come
+from the Antigravity app itself while it runs: the same local request its own
+status bar makes, to its language server on `127.0.0.1`. When Antigravity is
+closed, the tab says so.
+
 ## Privacy
 
-- **Network:** the only request is the one above, to `api.anthropic.com`.
-  Nothing else leaves your computer. There is no telemetry.
+- **Network:** the only request that leaves your computer is the one above, to
+  `api.anthropic.com`. Antigravity's quotas are read from the running app over
+  `127.0.0.1`. There is no telemetry.
 - **Credentials:** `~/.claude/.credentials.json` is only ever read, never
   written, copied or logged.
 - **Stored locally:** in `~/.cache/`:
@@ -185,10 +207,10 @@ cached readings are kept; delete them with `rm -f ~/.cache/claude-usage*.json`.
 ```
 plasmoid/
   metadata.json            applet metadata
-  contents/code/fetch.py   all data work: API, cache, alerts, log scan, live sessions
+  contents/code/fetch.py   all data work: API, cache, alerts, log scan, live sessions, other tools
   contents/config/main.xml settings and their defaults
   contents/ui/             QML: main.qml (panel + popup), PlanPage, ActivityPage,
-                           SessionsPage, SettingsWindow, Theme.js (palette),
+                           SessionsPage, OthersPage, SettingsWindow, Theme.js (palette),
                            Colours.qml (user colours) and small shared components
 usage_tray.py              PySide6 tray front-end; imports fetch.py
 install.sh                 install / update / uninstall / test
@@ -202,6 +224,7 @@ JSON output:
 python3 plasmoid/contents/code/fetch.py           # plan usage (also sends alerts)
 python3 plasmoid/contents/code/fetch.py --stats   # Claude Code activity from local logs
 python3 plasmoid/contents/code/fetch.py --live    # running sessions
+python3 plasmoid/contents/code/fetch.py --others  # Codex and Antigravity limits
 ```
 
 **Tests.** The self-tests use only temporary files. They don't touch your

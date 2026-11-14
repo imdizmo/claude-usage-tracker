@@ -202,6 +202,21 @@ Window {
                         }
                         Divider {}
                         SettingRow {
+                            title: "Show Claude"
+                            Toggle { checked: win.cfg.panelClaude; onToggled: v => win.cfg.panelClaude = v }
+                        }
+                        Divider {}
+                        SettingRow {
+                            title: "Show Codex"
+                            Toggle { checked: win.cfg.panelCodex; onToggled: v => win.cfg.panelCodex = v }
+                        }
+                        Divider {}
+                        SettingRow {
+                            title: "Show Antigravity (most-used model)"
+                            Toggle { checked: win.cfg.panelAntigravity; onToggled: v => win.cfg.panelAntigravity = v }
+                        }
+                        Divider {}
+                        SettingRow {
                             title: "Show second limit"
                             Toggle { checked: win.cfg.showWeekly; onToggled: v => win.cfg.showWeekly = v }
                         }

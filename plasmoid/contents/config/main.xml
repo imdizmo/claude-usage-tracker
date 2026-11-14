@@ -11,6 +11,9 @@
     <entry name="showLiveInPanel" type="Bool"><default>true</default></entry>
     <entry name="showWeekly" type="Bool"><default>true</default></entry>
     <entry name="panelStyle" type="String"><default>meters</default></entry>
+    <entry name="panelClaude" type="Bool"><default>true</default></entry>
+    <entry name="panelCodex" type="Bool"><default>false</default></entry>
+    <entry name="panelAntigravity" type="Bool"><default>false</default></entry>
     <entry name="accentColor" type="String"><default></default></entry>
     <entry name="okColor" type="String"><default></default></entry>
     <entry name="warnColor" type="String"><default></default></entry>

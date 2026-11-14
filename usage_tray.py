@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Claude Code usage tray widget: live plan limit % (5h where the plan has it, weekly, per-model weekly).
+"""Claude Code usage tray widget: live plan limit % (5h where the plan has it, weekly, per-model weekly),
+plus Codex and Antigravity limits when they're on this machine.
 
 Data comes from plasmoid/contents/code/fetch.py, shared with the Plasma applet:
 it reads the OAuth token Claude Code stores in ~/.claude/.credentials.json and
@@ -13,7 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMenu, QProgressBar,
+    QApplication, QGridLayout, QLabel, QMenu, QProgressBar,
     QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
@@ -69,14 +70,14 @@ class Overlay(QWidget):
         title = QLabel("Claude Code usage  ·  drag to move")
         title.setStyleSheet("font-weight:bold;color:#8b949e;")
         lay.addWidget(title)
-        self.lay = lay
+        self.grid = QGridLayout()  # one row per limit, columns aligned
+        lay.addLayout(self.grid)
         self.rows = {}  # limit key -> widgets, made when a limit first appears: plans differ
 
     def row(self, name, label):
         if name not in self.rows:
-            row = QHBoxLayout()
+            r = self.grid.rowCount()
             lbl = QLabel(label)
-            lbl.setFixedWidth(48)
             bar = QProgressBar()
             bar.setTextVisible(False)
             bar.setFixedWidth(140)
@@ -85,23 +86,22 @@ class Overlay(QWidget):
             pct.setAlignment(Qt.AlignRight)
             reset = QLabel()
             reset.setStyleSheet("color:#8b949e;")
-            for w in (lbl, bar, pct, reset):
-                row.addWidget(w)
-            self.lay.addLayout(row)
+            for col, w in enumerate((lbl, bar, pct, reset)):
+                self.grid.addWidget(w, r, col)
             self.rows[name] = (lbl, bar, pct, reset)
         return self.rows[name]
 
-    def update_data(self, data):
-        for name in self.rows.keys() - set(data["limits"]):  # limit gone (e.g. Ultra verified: no 5h)
+    def update_data(self, entries):
+        """entries: [(key, label, pct, reset text)], one per limit, in display order."""
+        for name in self.rows.keys() - {e[0] for e in entries}:  # limit gone (e.g. Ultra verified: no 5h)
             for w in self.rows.pop(name):
                 w.deleteLater()
-        for name in data["limits"]:
-            _, bar, pct, reset = self.row(name, data[name]["short"])
-            val = data[name]["pct"]
+        for name, label, val, reset_text in entries:
+            _, bar, pct, reset = self.row(name, label)
             bar.setValue(min(val, 100))
             bar.setStyleSheet(f"QProgressBar::chunk{{background:{color_for(val).name()};border-radius:4px;}}")
             pct.setText(f"{val}%")
-            reset.setText(data[name]["reset"])
+            reset.setText(reset_text)
 
     def pin_corner(self):
         """Sit flush on top of the taskbar, bottom-right. availableGeometry()
@@ -165,13 +165,18 @@ class Tray(QSystemTrayIcon):
             data = fetch.poll(levels=None, max_age=max_age)  # notifications are the plasmoid's job
         except Exception as e:  # full disk, malformed cache/API data
             data = {"error": f"Unexpected error: {e!r}"}
+        if "error" not in data:
+            try:
+                data["tools"] = fetch.others()["tools"]
+            except Exception:  # pass Codex/Antigravity by rather than lose Claude's reading
+                pass
         self.ready.emit(data)
 
     def show_data(self, data):
         self._fetching = False
         try:
             if "error" not in data:
-                self.overlay.update_data(data)  # KeyError on a partial or odd reading
+                self.overlay.update_data(entries(data))  # KeyError on a partial or odd reading
         except Exception as e:  # a reading missing a window: say so, don't freeze old numbers
             data = {"error": f"Unexpected error: {e!r}"}
         if "error" in data:
@@ -183,8 +188,17 @@ class Tray(QSystemTrayIcon):
             self._pinned = True
         self.setIcon(make_icon(data[data["limits"][0]]["pct"]))
         stale = f"\n(reading from {data['updated']} — {data['why']})" if data["stale"] else ""
-        lines = (f"{data[n]['label']}: {data[n]['pct']}%  ({data[n]['reset']})" for n in data["limits"])
+        lines = (f"{label}: {val}%  ({reset})" for _, label, val, reset in entries(data, long=True))
         self.setToolTip("Claude Code\n" + "\n".join(lines) + stale)
+
+
+def entries(data, long=False):
+    """Overlay/tooltip rows: Claude's limits, then each other tool's ("Codex 5-hour", "Antigravity Claude Opus 5.5")."""
+    rows = [(n, data[n]["label" if long else "short"], data[n]["pct"], data[n]["reset"]) for n in data["limits"]]
+    for t in data.get("tools", []):
+        rows += [(f"{t['name']}/{r['label']}", f"{t['name']} {r['label'].removesuffix(' limit')}", r["pct"], r["reset"])
+                 for r in t["limits"]]
+    return rows
 
 
 def _selftest():
@@ -193,9 +207,13 @@ def _selftest():
     app = QApplication.instance() or QApplication([])  # noqa: F841 (widgets need one)
     o = Overlay()
     lim = lambda *ks: fetch.render({k: {"pct": 5, "resets_at": None} for k in ks})
-    o.update_data(lim("5h", "weekly"))
-    o.update_data(lim("weekly", "fable"))  # account verified for Ultra: 5h row goes, Fable row comes
+    o.update_data(entries(lim("5h", "weekly")))
+    o.update_data(entries(lim("weekly", "fable")))  # account verified for Ultra: 5h row goes, Fable row comes
     assert list(o.rows) == ["weekly", "fable"] and o.rows["fable"][2].text() == "5%", o.rows
+    d = lim("weekly") | {"tools": [{"name": "Codex", "limits": [{"label": "5-hour limit", "pct": 40, "reset": "x"}]}]}
+    assert entries(d)[1] == ("Codex/5-hour limit", "Codex 5-hour", 40, "x"), entries(d)
+    o.update_data(entries(d))
+    assert list(o.rows) == ["weekly", "Codex/5-hour limit"], o.rows
 
 
 def main():
